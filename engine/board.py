@@ -136,3 +136,4 @@ class Position:
                 board = put(board, j + S, ".")
 
         return Position(board, score, wc, bc, ep, kp).rotate()
+        

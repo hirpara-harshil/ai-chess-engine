@@ -1,5 +1,3 @@
-# main.py
-
 from engine.board import Position, INITIAL_BOARD, Move, A1
 from engine.search import Searcher
 from engine.evaluate import evaluate
@@ -18,10 +16,16 @@ def parse_move(move_str):
     prom = move_str[4].upper() if len(move_str) == 5 else ""
     return Move(i, j, prom)
 
-def move_to_str(move):
+def move_to_str(move, is_white):
+    """Convert Move to algebraic notation based on perspective"""
     def from_index(i):
         rank, file = divmod(i - A1, 10)
         return chr(file + ord('a')) + str(-rank + 1)
+
+    if not is_white:
+        # If it's black's turn, we need to rotate the move
+        move = Move(119 - move.i, 119 - move.j, move.prom)
+
     return from_index(move.i) + from_index(move.j) + move.prom.lower()
 
 def print_board(board):
@@ -73,12 +77,12 @@ def main():
             for depth, gamma, score, move in searcher.search(history):
                 if move:
                     best_move = move
-                    print(f"Depth {depth}, score {score}, move {move_to_str(move)}")
+                    print(f"Depth {depth}, score {score}, move {move_to_str(move, False)}")
                 if depth >= 4:
                     break
 
             if best_move:
-                print(f"Engine plays: {move_to_str(best_move)}")
+                print(f"Engine plays: {move_to_str(best_move, False)}")
                 next_pos = current.move(best_move)
                 next_pos.score = evaluate(next_pos)
                 history.append(next_pos)
