@@ -4,24 +4,21 @@ python main.py
 
 📂 folder structure information:
 ai-chess-engine/
-│
-├── main.py                # Entry point for the application
-├── engine/                # Folder for the chess engine code
-│   ├── __init__.py        # Makes the engine folder a package
-│   ├── board.py           # Class for the chess board representation
-│   ├── move.py            # Class for handling moves
-│   ├── engine.py          # Main engine logic
-│   ├── evaluation.py      # Evaluation functions
-│   ├── search.py          # Search algorithms (e.g., MCTS, Negamax)
-│   ├── opening_book.py     # Opening book for fast moves
-│   └── utils.py           # Utility functions
-│
-├── tests/                 # Folder for testing
-│   ├── __init__.py
-│   ├── test_engine.py      # Tests for the engine
-│   └── test_performance.py  # Performance tests
-│
-└── ui/                    # Folder for the user interface
-    ├── __init__.py
-    ├── gui.py             # GUI for playing against the engine
-    └── assets/            # Assets for the GUI (images, etc.)
+├── main.py                 # Launches UI/tournaments
+├── engine/                 # Core engine logic
+│   ├── board.py            # Bitboard representation
+│   ├── movegen.py          # Magic bitboard move generation
+│   ├── search.py           # Parallel MCTS+Negascout
+│   ├── eval.py             # NNUE evaluation
+│   ├── book.py            # Polyglot opening book
+│   └── protocols.py       # UCI communication
+├── tournaments/
+│   ├── manager.py         # Engine vs Engine testing
+│   └── elo.py            # Stockfish comparison
+└── ui/
+    ├── board_gui.py       # Pygame interface
+    └── assets/            # Piece images
+
+
+
+    sudo apt-get install cutechess
