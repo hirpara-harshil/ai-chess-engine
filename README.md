@@ -1,5 +1,5 @@
 🌐 run command : 
-.venv\Scripts\activate
+.\.venv\Scripts\activate
 python main.py
 
 📂 folder structure information:

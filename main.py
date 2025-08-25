@@ -5,7 +5,7 @@ import threading
 import time
 from gui import ChessGUI
 from engine.search import find_best_move
-from engine import eval as engine_eval
+from engine import eval_model as engine_eval
 
 # Default engine parameters
 DEFAULT_DEPTH = 3

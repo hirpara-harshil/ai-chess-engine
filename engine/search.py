@@ -5,7 +5,9 @@
 import chess
 import time
 from typing import Optional, Tuple
-from engine import eval as engine_eval  # fallback if eval_fn not provided
+# from engine import eval as engine_eval  # old
+from engine import eval_model as engine_eval  # new
+
 
 # Simple piece values for MVV-LVA ordering (used for sorting captures)
 MVV_LVA_VALUE = {
