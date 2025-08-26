@@ -1,6 +1,6 @@
 # engine/search.py
-# TT + PVS + LMR + Null-Move + Aspiration + (NEW) Futility, LMP, Razoring.
-# strict time control with safety margin & pre-eval checks.
+# TT + PVS + LMR + Null-Move + Aspiration + Futility, LMP, Razoring
+# Tight time control; tactical & endgame fixes (mates, promotions, zugzwang).
 import time, math, random
 import chess, chess.polyglot
 from typing import Optional, Callable, Dict
@@ -19,7 +19,7 @@ def mvv_lva(board: chess.Board, m: chess.Move) -> int:
     return 100*PIECE_CP[vic] - PIECE_CP[atk]
 
 def is_tactical_parent(board: chess.Board, m: chess.Move) -> bool:
-    # tactical properties must be computed on the parent position (before push)
+    # compute on parent (before push)
     return board.is_capture(m) or (m.promotion is not None) or board.gives_check(m)
 
 EXACT, LOWER, UPPER = 0, 1, 2
@@ -54,13 +54,38 @@ class TranspositionTable:
 
 InfoCallback = Optional[Callable[[Dict], None]]
 
-# strength profiles (unchanged behavior if you pass strength="MAX")
 PROFILE = {
     "FM":  {"depth_cap": 6,  "top_k": 3, "temperature": 1.2},
     "IM":  {"depth_cap": 10, "top_k": 2, "temperature": 0.9},
     "GM":  {"depth_cap": 64, "top_k": 1, "temperature": 0.6},
     "MAX": {"depth_cap": 64, "top_k": 1, "temperature": 0.0},
 }
+
+def popcount(bb) -> int:
+    return int(bb).bit_count()
+
+def material_phase(board: chess.Board) -> int:
+    # Rough phase proxy (0..16 like MAX_PHASE)
+    wN = popcount(board.pieces(chess.KNIGHT, chess.WHITE))
+    bN = popcount(board.pieces(chess.KNIGHT, chess.BLACK))
+    wB = popcount(board.pieces(chess.BISHOP, chess.WHITE))
+    bB = popcount(board.pieces(chess.BISHOP, chess.BLACK))
+    wR = popcount(board.pieces(chess.ROOK,   chess.WHITE))
+    bR = popcount(board.pieces(chess.ROOK,   chess.BLACK))
+    wQ = popcount(board.pieces(chess.QUEEN,  chess.WHITE))
+    bQ = popcount(board.pieces(chess.QUEEN,  chess.BLACK))
+    return min(16, (wN+bN)*1 + (wB+bB)*1 + (wR+bR)*2 + (wQ+bQ)*4)
+
+def is_pawnless(board: chess.Board) -> bool:
+    return (popcount(board.pieces(chess.PAWN, chess.WHITE)) + popcount(board.pieces(chess.PAWN, chess.BLACK))) == 0
+
+def low_material(board: chess.Board) -> bool:
+    # Very light material: likely zugzwang-prone (e.g., rook/queen vs king or minor vs king, no pawns).
+    minors = popcount(board.pieces(chess.KNIGHT, True)) + popcount(board.pieces(chess.KNIGHT, False)) \
+           + popcount(board.pieces(chess.BISHOP, True)) + popcount(board.pieces(chess.BISHOP, False))
+    rooks  = popcount(board.pieces(chess.ROOK, True)) + popcount(board.pieces(chess.ROOK, False))
+    queens = popcount(board.pieces(chess.QUEEN, True)) + popcount(board.pieces(chess.QUEEN, False))
+    return (is_pawnless(board) and (rooks + queens <= 2) and (minors <= 2))
 
 class Searcher:
     def __init__(self, eval_white_fn, tt_mb=128, safety_margin_s: float = 0.08):
@@ -81,7 +106,7 @@ class Searcher:
         return False
 
     def static_eval(self, board: chess.Board) -> int:
-        if self._tick():  # don’t start a slow eval when out of time
+        if self._tick():  # avoid long eval late
             return 0
         s_white = self.eval_white(board)
         return int(s_white if board.turn == chess.WHITE else -s_white)
@@ -119,11 +144,11 @@ class Searcher:
         return (max(alpha, lo), min(beta, hi))
 
     def qsearch(self, board: chess.Board, alpha: int, beta: int) -> int:
-        """Quiescence: if in check, search all evasions; otherwise stand-pat + captures."""
+        """Quiescence: if in check, search all evasions; otherwise stand-pat + captures + promotions."""
         if self._tick(): return 0
         self.nodes += 1
 
-        # In-check qsearch: explore all legal evasions (not only captures)
+        # In-check: search all legal moves (evasions)
         if board.is_check():
             best = -INF
             moves = self.order_moves(board, list(board.legal_moves), None, 0)
@@ -135,7 +160,6 @@ class Searcher:
                 if score >= beta: return beta
                 if score > best: best = score
                 if score > alpha: alpha = score
-            # no legal move -> checkmated at qsearch node
             return best if best != -INF else -MATE_SCORE
 
         # Stand-pat
@@ -143,11 +167,15 @@ class Searcher:
         if stand >= beta: return beta
         if alpha < stand: alpha = stand
 
-        # Captures only
-        caps = [m for m in board.legal_moves if board.is_capture(m)]
-        if caps:
-            caps = self.order_moves(board, caps, None, 0)
-        for m in caps:
+        # Tactics at the horizon: captures + non-capture promotions
+        moves = []
+        for m in board.legal_moves:
+            if board.is_capture(m) or (m.promotion is not None):
+                moves.append(m)
+        if moves:
+            moves = self.order_moves(board, moves, None, 0)
+
+        for m in moves:
             if self._tick(): return alpha
             board.push(m)
             score = -self.qsearch(board, -beta, -alpha)
@@ -158,6 +186,9 @@ class Searcher:
 
     def can_null(self, board: chess.Board) -> bool:
         if board.is_check(): return False
+        # Avoid null-move in zugzwang-prone endgames
+        if low_material(board) or material_phase(board) <= 4:
+            return False
         minors_majors = 0
         for pt in (chess.KNIGHT, chess.BISHOP, chess.ROOK, chess.QUEEN):
             minors_majors += len(board.pieces(pt, True)) + len(board.pieces(pt, False))
@@ -194,10 +225,10 @@ class Searcher:
         if depth <= 0:
             return self.qsearch(board, alpha, beta)
 
-        # --- Razoring (depth==1, not in check): try qsearch early if static eval way below alpha ---
+        # Razoring (depth==1, not in check)
         if depth == 1 and not in_check:
             st = self.static_eval(board)
-            R = 200  # cp margin (tune)
+            R = 200
             if st + R <= alpha:
                 val = self.qsearch(board, alpha, beta)
                 if val <= alpha:
@@ -230,32 +261,32 @@ class Searcher:
         first = True
         orig_alpha = alpha
 
-        # Futility/LMP parameters
-        fut_margin = 100 * (depth)      # cp margin; tune
-        lmp_threshold = 8 + 2*depth     # after this many quiets at shallow depth, prune
+        # Futility/LMP parameters; relax them in endgame
+        deep_endgame = (material_phase(board) <= 4) or low_material(board)
+        fut_margin = 100 * depth
+        lmp_threshold = 8 + 2*depth
 
         tried_quiets = 0
         for i, m in enumerate(moves):
             if self._tick(): return best if best != -INF else 0
 
-            # --- Precompute tactical flags on the parent (correctly) ---
+            # Precompute tactics on parent
             is_cap = board.is_capture(m)
             tactical = is_tactical_parent(board, m)
 
             board.push(m)
 
-            # --- Futility pruning (skip hopeless quiets at shallow depths) ---
-            if not in_check and not is_cap and depth <= 3:
-                st = self.static_eval(board)  # guarded by _tick()
+            # Futility pruning (only if not deep endgame; quiets at shallow depth)
+            if not deep_endgame and not in_check and not is_cap and depth <= 3:
+                st = self.static_eval(board)
                 if st + fut_margin <= alpha:
                     board.pop()
                     tried_quiets += 1
-                    # Late Move Pruning: skip very late quiets at shallow depth
                     if depth <= 2 and tried_quiets > lmp_threshold:
                         continue
                     continue
 
-            # --- LMR (don't reduce checks/captures/promos; and don't reduce if child is check) ---
+            # LMR: don't reduce checks/caps/promos; also skip if child is in check
             child_in_check = board.is_check()
             do_lmr = (not in_pv) and depth >= 3 and (not tactical) and (not child_in_check)
             reduction = 0
@@ -307,6 +338,14 @@ class Searcher:
         return None
 
     def _root_loop(self, board: chess.Board, depth: int, alpha: int, beta: int):
+        # Quick M1: if any root move immediately checkmates, play it
+        for m in board.legal_moves:
+            board.push(m)
+            if board.is_checkmate():
+                board.pop()
+                return ([(m, MATE_SCORE - 1)], MATE_SCORE - 1)
+            board.pop()
+
         root_scores = []
         k = chess.polyglot.zobrist_hash(board)
         tt_move = None
@@ -316,10 +355,8 @@ class Searcher:
         best = -INF; first = True
         for m in moves:
             if self._tick(): break
-            # DEFENSIVE: ensure the move is still legal for this board state
             if m not in board.legal_moves:
                 continue
-
             board.push(m)
             if first:
                 sc = -self.search(board, depth-1, -beta, -alpha, ply=1, in_pv=True)
