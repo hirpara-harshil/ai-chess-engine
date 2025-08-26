@@ -1,41 +1,36 @@
-# scripts/train_eval_model.py
-
+# scripts/train_eval_model.py  (minimal changes)
+import numpy as np
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from prepare_data import X_train, y_train, X_val, y_val
-from tqdm.keras import TqdmCallback  # adds nice progress bar
+from tqdm.keras import TqdmCallback
 
-# Detect GPU if available
-physical_devices = tf.config.list_physical_devices('GPU')
-if physical_devices:
-    tf.config.experimental.set_memory_growth(physical_devices[0], True)
-    print("✅ GPU detected and memory growth enabled.")
-else:
-    print("⚠️ No GPU detected. Training will use CPU.")
+# clip extreme SF scores (in pawns) to reduce outliers
+y_train_clip = np.clip(y_train, -10.0, 10.0)  # +/- 1000cp
+y_val_clip   = np.clip(y_val,   -10.0, 10.0)
 
-# Build a small CNN
 model = models.Sequential([
     layers.Input(shape=(8,8,12)),
-    layers.Conv2D(64, kernel_size=3, activation='relu', padding='same'),
-    layers.Conv2D(64, kernel_size=3, activation='relu', padding='same'),
+    layers.Conv2D(64, 3, padding='same', activation='relu'),
+    layers.Conv2D(64, 3, padding='same', activation='relu'),
     layers.Flatten(),
+    layers.Dense(256, activation='relu'),
     layers.Dense(128, activation='relu'),
-    layers.Dense(1)  # output: evaluation in pawns
+    layers.Dense(1)   # pawns
 ])
 
-model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-model.summary()
+model.compile(optimizer=tf.keras.optimizers.Adam(1e-3),
+              loss=tf.keras.losses.Huber(delta=0.5),
+              metrics=['mae'])
 
-# Train
 model.fit(
-    X_train, y_train,
-    validation_data=(X_val, y_val),
-    epochs=10,
-    batch_size=64,
-    verbose=0,            # hide default output
+    X_train, y_train_clip,
+    validation_data=(X_val, y_val_clip),
+    epochs=15,
+    batch_size=128,
+    verbose=0,
     callbacks=[TqdmCallback(verbose=1)]
 )
 
-# Save model 
 model.save("data/processed/eval_model.keras")
-print("✅ Model trained and saved to data/processed/eval_model.keras")
+print("✅ Saved model.")

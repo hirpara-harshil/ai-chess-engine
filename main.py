@@ -90,7 +90,7 @@ class App:
                 if not self.play_vs_bot_var.get():
                     return
                 # time limit optional: None means full search to depth
-                best = find_best_move(self.board, depth=depth, eval_fn=engine_eval.evaluate, time_limit=None)
+                best = find_best_move(self.board, depth=depth, eval_fn=engine_eval.evaluate, time_limit=1.0)
                 if best is not None:
                     # push move and update GUI (must schedule on main thread)
                     def push_and_render():
