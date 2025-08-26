@@ -162,6 +162,7 @@ class App:
                             self.board.push(best)
                             self.gui.last_move = best
                             self.gui.render()
+                            self.gui.post_move_checks()
                         # Engine finished: now lock/unlock clicks based on whose turn it is
                         self.engine_thinking = False
                         self._lock_clicks_if_bots_turn()

@@ -208,9 +208,9 @@ class ChessGUI:
         self._clear_selection()
 
         # Check game end states (includes 50-move, repetitions when claimable)
-        self._post_move_checks()
+        self.post_move_checks()
 
-    def _post_move_checks(self):
+    def post_move_checks(self):
         # Automatic end if forced (checkmate/stalemate, insufficient material, fivefold, 75-move)
         # Note: For 50-move and threefold, they are claimable; we respect claims via button and
         # also show status. But is_game_over(claim_draw=True) will treat claimable as game over.
