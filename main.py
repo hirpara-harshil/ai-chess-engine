@@ -113,9 +113,11 @@ class App:
             try:
                 if not self.play_vs_bot_var.get():
                     return
+                board_snapshot = self.board.copy()  # isolates search from GUI mutations
+
                 # ask engine; strict per-move time
                 best = find_best_move(
-                    self.board,
+                    board_snapshot,
                     depth=depth,
                     eval_fn=engine_eval.evaluate,
                     time_limit=time_limit,

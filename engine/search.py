@@ -295,6 +295,10 @@ class Searcher:
         best = -INF; first = True
         for m in moves:
             if self._tick(): break
+            # DEFENSIVE: ensure the move is still legal for this board state
+            if m not in board.legal_moves:
+                continue
+            
             board.push(m)
             if first:
                 sc = -self.search(board, depth-1, -beta, -alpha, ply=1, in_pv=True)
