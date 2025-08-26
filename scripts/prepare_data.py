@@ -1,3 +1,5 @@
+# scripts/prepare_data.py
+
 import random
 import numpy as np
 import chess

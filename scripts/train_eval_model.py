@@ -1,3 +1,5 @@
+# scripts/train_eval_model.py
+
 import tensorflow as tf
 from tensorflow.keras import layers, models
 from prepare_data import X_train, y_train, X_val, y_val

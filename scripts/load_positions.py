@@ -1,3 +1,4 @@
+# scripts/load_positions.py
 import json
 
 def load_positions(file_path):
