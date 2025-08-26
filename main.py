@@ -2,7 +2,6 @@
 import tkinter as tk
 import chess
 import threading
-import time
 from gui import ChessGUI
 from engine.search import find_best_move
 from engine import eval_model as engine_eval
@@ -22,13 +21,17 @@ class App:
 
         # Play vs bot checkbox
         self.play_vs_bot_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(ctrl, text="Play vs Bot", variable=self.play_vs_bot_var,
-                       command=self._maybe_start_engine).grid(row=0, column=0, padx=4)
+        tk.Checkbutton(
+            ctrl, text="Play vs Bot", variable=self.play_vs_bot_var,
+            command=self._on_mode_change
+        ).grid(row=0, column=0, padx=4)
 
         # Choose side
         self.side_var = tk.StringVar(value="white")
-        tk.Radiobutton(ctrl, text="You: White", variable=self.side_var, value="white").grid(row=0, column=1)
-        tk.Radiobutton(ctrl, text="You: Black", variable=self.side_var, value="black").grid(row=0, column=2)
+        tk.Radiobutton(ctrl, text="You: White", variable=self.side_var, value="white",
+                       command=self._on_side_change).grid(row=0, column=1)
+        tk.Radiobutton(ctrl, text="You: Black", variable=self.side_var, value="black",
+                       command=self._on_side_change).grid(row=0, column=2)
 
         # Strength selector
         tk.Label(ctrl, text="Strength:").grid(row=0, column=3, padx=(10,0))
@@ -44,7 +47,7 @@ class App:
         self.time_spin.insert(0, "1.0")  # default 1 second
         self.time_spin.grid(row=0, column=6, padx=4)
 
-        # Depth (kept for analysis cap; engine also caps by strength)
+        # Depth cap
         tk.Label(ctrl, text="Max Depth:").grid(row=0, column=7, padx=(10,0))
         self.depth_spin = tk.Spinbox(ctrl, from_=1, to=64, width=4)
         self.depth_spin.delete(0, "end")
@@ -64,15 +67,42 @@ class App:
         # Start poller
         self._poll_engine()
 
+    # ---------- Helpers ----------
+    def _bot_color(self):
+        return chess.WHITE if self.side_var.get() == "black" else chess.BLACK
+
+    def _lock_clicks_if_bots_turn(self):
+        """Disable clicks whenever it's the bot's turn; enable for human."""
+        if not self.play_vs_bot_var.get():
+            self._enable_clicks()
+            return
+        if self.board.turn == self._bot_color():
+            self._disable_clicks()
+        else:
+            self._enable_clicks()
+
+    # ---------- UI events ----------
+    def _on_mode_change(self):
+        # Called when Play vs Bot toggles
+        self._lock_clicks_if_bots_turn()
+        self._maybe_start_engine()
+
+    def _on_side_change(self):
+        # Called when 'You: White/Black' changes
+        self._lock_clicks_if_bots_turn()
+        self._maybe_start_engine()
+
     def new_game(self):
         self.board.reset()
         self.gui.new_game()
+        self._lock_clicks_if_bots_turn()
         self._maybe_start_engine()
 
+    # ---------- Engine orchestration ----------
     def _maybe_start_engine(self):
         if not self.play_vs_bot_var.get():
             return
-        bot_color = chess.WHITE if self.side_var.get() == "black" else chess.BLACK
+        bot_color = self._bot_color()
         if self.board.turn == bot_color and not self.engine_thinking:
             self._launch_engine_move()
 
@@ -87,6 +117,7 @@ class App:
 
     def _launch_engine_move(self):
         self.engine_thinking = True
+        # Always lock clicks while engine is thinking
         self._disable_clicks()
 
         depth = int(self.depth_spin.get())
@@ -96,7 +127,6 @@ class App:
         except Exception:
             time_limit = 1.0
 
-        # analysis callback to live-update PV each completed depth
         def info_cb(info):
             def _update():
                 if info.get("mate") is not None:
@@ -113,9 +143,10 @@ class App:
             try:
                 if not self.play_vs_bot_var.get():
                     return
-                board_snapshot = self.board.copy()  # isolates search from GUI mutations
 
-                # ask engine; strict per-move time
+                # Search on a snapshot to avoid races with GUI
+                board_snapshot = self.board.copy()
+
                 best = find_best_move(
                     board_snapshot,
                     depth=depth,
@@ -126,29 +157,37 @@ class App:
                 )
                 if best is not None:
                     def push_and_render():
+                        # push only if still legal in current position
                         if best in self.board.legal_moves:
                             self.board.push(best)
                             self.gui.last_move = best
                             self.gui.render()
+                        # Engine finished: now lock/unlock clicks based on whose turn it is
                         self.engine_thinking = False
-                        self._enable_clicks()
+                        self._lock_clicks_if_bots_turn()
+                        # If it's still bot to move (rare, e.g., toggled side), go again
                         self._maybe_start_engine()
                     self.root.after(1, push_and_render)
                 else:
-                    self.root.after(1, self._enable_clicks)
+                    self.root.after(1, self._lock_clicks_if_bots_turn)
                     self.engine_thinking = False
             finally:
+                # Safety: ensure flags/clicks restored even on exceptions
                 self.root.after(1, lambda: setattr(self, "engine_thinking", False))
-                self.root.after(1, self._enable_clicks)
+                self.root.after(1, self._lock_clicks_if_bots_turn)
 
         t = threading.Thread(target=worker, daemon=True)
         t.start()
 
     def _poll_engine(self):
+        """
+        Every 200ms: enforce click lock and auto-start engine if it's the bot's turn.
+        This prevents the user from sneaking in a move for the bot.
+        """
         try:
+            self._lock_clicks_if_bots_turn()
             if self.play_vs_bot_var.get() and not self.engine_thinking:
-                bot_color = chess.WHITE if self.side_var.get() == "black" else chess.BLACK
-                if self.board.turn == bot_color:
+                if self.board.turn == self._bot_color():
                     self._launch_engine_move()
         finally:
             self.root.after(200, self._poll_engine)
@@ -156,7 +195,7 @@ class App:
 def main():
     root = tk.Tk()
     app = App(root)
-    app._enable_clicks()
+    app._lock_clicks_if_bots_turn()
     root.mainloop()
 
 if __name__ == "__main__":
