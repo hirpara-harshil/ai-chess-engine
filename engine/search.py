@@ -3,7 +3,7 @@
 # strict time control with safety margin & pre-eval checks.
 import time, math, random
 import chess, chess.polyglot
-from typing import Optional, Callable, List, Tuple, Dict
+from typing import Optional, Callable, Dict
 
 MATE_SCORE = 100000
 INF = 10**9
@@ -18,8 +18,9 @@ def mvv_lva(board: chess.Board, m: chess.Move) -> int:
     atk = board.piece_type_at(m.from_square)
     return 100*PIECE_CP[vic] - PIECE_CP[atk]
 
-def is_tactical(board: chess.Board, m: chess.Move) -> bool:
-    return board.is_capture(m) or m.promotion is not None or board.gives_check(m)
+def is_tactical_parent(board: chess.Board, m: chess.Move) -> bool:
+    # tactical properties must be computed on the parent position (before push)
+    return board.is_capture(m) or (m.promotion is not None) or board.gives_check(m)
 
 EXACT, LOWER, UPPER = 0, 1, 2
 
@@ -118,14 +119,31 @@ class Searcher:
         return (max(alpha, lo), min(beta, hi))
 
     def qsearch(self, board: chess.Board, alpha: int, beta: int) -> int:
+        """Quiescence: if in check, search all evasions; otherwise stand-pat + captures."""
         if self._tick(): return 0
         self.nodes += 1
 
+        # In-check qsearch: explore all legal evasions (not only captures)
+        if board.is_check():
+            best = -INF
+            moves = self.order_moves(board, list(board.legal_moves), None, 0)
+            for m in moves:
+                if self._tick(): break
+                board.push(m)
+                score = -self.qsearch(board, -beta, -alpha)
+                board.pop()
+                if score >= beta: return beta
+                if score > best: best = score
+                if score > alpha: alpha = score
+            # no legal move -> checkmated at qsearch node
+            return best if best != -INF else -MATE_SCORE
+
+        # Stand-pat
         stand = self.static_eval(board)
         if stand >= beta: return beta
         if alpha < stand: alpha = stand
 
-        # captures only
+        # Captures only
         caps = [m for m in board.legal_moves if board.is_capture(m)]
         if caps:
             caps = self.order_moves(board, caps, None, 0)
@@ -213,14 +231,17 @@ class Searcher:
         orig_alpha = alpha
 
         # Futility/LMP parameters
-        fut_margin = 100 * (depth)  # cp margin; tune
-        lmp_threshold = 8 + 2*depth  # after this many quiets at shallow depth, prune
+        fut_margin = 100 * (depth)      # cp margin; tune
+        lmp_threshold = 8 + 2*depth     # after this many quiets at shallow depth, prune
 
         tried_quiets = 0
         for i, m in enumerate(moves):
             if self._tick(): return best if best != -INF else 0
 
+            # --- Precompute tactical flags on the parent (correctly) ---
             is_cap = board.is_capture(m)
+            tactical = is_tactical_parent(board, m)
+
             board.push(m)
 
             # --- Futility pruning (skip hopeless quiets at shallow depths) ---
@@ -232,11 +253,11 @@ class Searcher:
                     # Late Move Pruning: skip very late quiets at shallow depth
                     if depth <= 2 and tried_quiets > lmp_threshold:
                         continue
-                    # move on
                     continue
 
-            # LMR
-            do_lmr = (not in_pv) and depth >= 3 and not is_tactical(board, m) and not board.is_check()
+            # --- LMR (don't reduce checks/captures/promos; and don't reduce if child is check) ---
+            child_in_check = board.is_check()
+            do_lmr = (not in_pv) and depth >= 3 and (not tactical) and (not child_in_check)
             reduction = 0
             if do_lmr:
                 reduction = int(0.75 + math.log(depth+1, 2) * math.log(i+2, 2))
@@ -262,10 +283,10 @@ class Searcher:
                 best_move = m
                 if sc > alpha:
                     alpha = sc
-                    if not is_tactical(board, m):
+                    if not tactical:
                         self.history[m.uci()] = self.history.get(m.uci(), 0) + depth*depth
                 if alpha >= beta:
-                    if not is_tactical(board, m):
+                    if not tactical:
                         k1, k2 = self.killers[ply]
                         if m != k1:
                             self.killers[ply] = [m, k1]
@@ -298,7 +319,7 @@ class Searcher:
             # DEFENSIVE: ensure the move is still legal for this board state
             if m not in board.legal_moves:
                 continue
-            
+
             board.push(m)
             if first:
                 sc = -self.search(board, depth-1, -beta, -alpha, ply=1, in_pv=True)
